@@ -1,56 +1,40 @@
-// BrewUI 设计系统 token（按 BrewColors.swift / BrewSpacing.swift 的色值 1:1 复刻）
-// srgb 分量转 hex：round(v*255)
+// ArkUI resolves these colors from the active light or dark resource group.
 
 export class C {
-  // Backgrounds
-  static readonly windowBase: string = '#F0F5F5';    // WindowBase
-  static readonly surface: string = '#FAFAF7';       // Surface
-  static readonly surfaceElevated: string = '#FFFFFF'; // SurfaceElevated
-  static readonly surfaceRecessed: string = '#DCE2E2'; // SurfaceRecessed
-  static readonly terminal: string = '#1E1E1E';       // Terminal
+  static readonly windowBase: Resource = $r('app.color.window_base');
+  static readonly surface: Resource = $r('app.color.surface');
+  static readonly surfaceElevated: Resource = $r('app.color.surface_elevated');
+  static readonly surfaceRecessed: Resource = $r('app.color.surface_recessed');
+  static readonly terminal: Resource = $r('app.color.terminal');
 
-  // Text
-  static readonly textPrimary: string = '#1A1A18';
-  static readonly textSecondary: string = '#5C5C5C';
-  static readonly textTertiary: string = '#969C9C';
-  static readonly textLink: string = '#5B9BD5';
-  static readonly textOnBrand: string = '#1A1A1A';
-  static readonly textBrand: string = '#E8971C';
-  static readonly codeDefault: string = '#D4D4D4';
-  static readonly codeCommand: string = '#6BC9FC';
-  static readonly codeArgument: string = '#A8D8A8';
-  static readonly codeOutput: string = '#C8C8C8';
-  static readonly codeError: string = '#FF7A72';
+  static readonly textPrimary: Resource = $r('app.color.text_primary');
+  static readonly textSecondary: Resource = $r('app.color.text_secondary');
+  static readonly textTertiary: Resource = $r('app.color.text_tertiary');
+  static readonly textLink: Resource = $r('app.color.text_link');
+  static readonly textBrand: Resource = $r('app.color.text_brand');
+  static readonly codeDefault: Resource = $r('app.color.code_default');
+  static readonly codeCommand: Resource = $r('app.color.code_command');
+  static readonly codeError: Resource = $r('app.color.code_error');
 
-  // Brand / Accent
-  static readonly brandPrimary: string = '#E8971C';
-  static readonly brandPrimaryHover: string = '#FCC96B';
-  static readonly brandPrimaryPressed: string = '#FBB040';
-  static readonly brandTint: string = '#FEF3DC';     // 选中行/包行高亮
+  static readonly brandPrimary: Resource = $r('app.color.brand_primary');
+  static readonly brandTint: Resource = $r('app.color.brand_tint');
+  static readonly selectionFill: Resource = $r('app.color.selection_fill');
+  static readonly selectionInk: Resource = $r('app.color.selection_ink');
+  static readonly ctaBlue: Resource = $r('app.color.cta_blue');
+  static readonly brandGradient: Resource = $r('app.color.brand_gradient');
+  static readonly caskBlue: Resource = $r('app.color.accent_violet');
+  static readonly outdated: Resource = $r('app.color.status_warning');
 
-  // CTA / controls — Homebrew 7 用系统蓝做主操作按钮（Upgrade All / Install / 分段选中）
-  static readonly ctaBlue: string = '#1A6FE8';
-  static readonly ctaBlueHover: string = '#4A90F0';
-  static readonly ctaBlueSubtle: string = '#DBEAFE';
-  static readonly caskBlue: string = '#5B9BD5';     // CASK 图标蓝
-  static readonly caskTint: string = '#E8F1FB';     // CASK 徽章底
-  static readonly outdated: string = '#B27A1A';     // OUTDATED 徽章文字/版本箭头深琥珀
+  static readonly statusSuccess: Resource = $r('app.color.status_success');
+  static readonly statusSuccessSubtle: Resource = $r('app.color.status_success_subtle');
+  static readonly statusWarning: Resource = $r('app.color.status_warning');
+  static readonly statusWarningSubtle: Resource = $r('app.color.status_warning_subtle');
+  static readonly statusError: Resource = $r('app.color.status_error');
+  static readonly statusErrorSubtle: Resource = $r('app.color.status_error_subtle');
+  static readonly statusInfo: Resource = $r('app.color.text_link');
 
-  // Status
-  static readonly statusSuccess: string = '#3CB371';
-  static readonly statusSuccessSubtle: string = '#EBF7F1';
-  static readonly statusWarning: string = '#F0AD4E';
-  static readonly statusWarningSubtle: string = '#FEF8EC';
-  static readonly statusError: string = '#D9534F';
-  static readonly statusErrorSubtle: string = '#FDECEB';
-  static readonly statusInfo: string = '#5B9BD5';
-  static readonly statusInfoSubtle: string = '#EFF4FC';
-
-  // Borders
-  static readonly borderDefault: string = '#14141414';
-  static readonly borderStrong: string = '#29292929';
-  static readonly borderBrand: string = '#E8971C';
-  static readonly borderSeparator: string = '#0F000000';
+  static readonly borderDefault: Resource = $r('app.color.border_default');
+  static readonly borderSeparator: Resource = $r('app.color.border_separator');
 }
 
 // Layout（对齐 BrewSpacing / BrewLayout，单位 vp≈pt）
@@ -63,10 +47,10 @@ export class L {
   static readonly xl: number = 24;
   static readonly xxl: number = 32;
 
-  static readonly sidebarWidth: number = 220;
+  static readonly sidebarWidth: number = 166;
   static readonly iconWidth: number = 20;
-  static readonly inspectorWidth: number = 320;
-  static readonly radiusMd: number = 8;
+  static readonly inspectorWidth: number = 360;
+  static readonly radiusMd: number = 10;
   static readonly radiusSm: number = 6;
 }
 

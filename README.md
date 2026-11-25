@@ -15,6 +15,12 @@
 - Doctor:三栏、Copy output/Run Again、大绿勾空状态、issue 列表 + 详情
 - 卸载确认对话框、Console 绿点历史 + Save/Copy/Clear + Ready 栏
 
+## 开发版
+
+- 发现页搜索 Harmonybrew 在线目录，展示近 30 天下载量、主页、依赖与安装命令。首次加载时显示列表和详情骨架屏。
+- Harmonybrew 命令由 Harbor 托管的本机服务执行。控制台显示命令输出、退出状态和取消操作。
+- 外观默认跟随系统，也可保存独立的浅色或深色设置。
+
 ---
 
 ## 历史阶段：Phase 2 — 实时 brew 数据（P1）
@@ -34,7 +40,7 @@
 4. 输出重定向到沙箱日志，UI 异步轮询 pidfile + 读回解析
 
 全部 6 页已接实时数据：
-- ✅ Installed / Upgrades / Discover（brew info --installed --json=v2，280 formulae）
+- ✅ Installed / Upgrades（`brew info --installed --json=v2`）
 - ✅ Doctor（brew doctor --json，6 findings）
 - ✅ Configuration（brew config，31 items）
 - ✅ Services（**Harbor 回环 IPC**，读 Harbor HAP 托管的真实服务状态；Harmonybrew 的 `brew services` 在鸿蒙无实现，故改走 Harbor）
@@ -46,7 +52,6 @@
 
 未实现（后续阶段）：
 - Console 富文本渲染（当前纯文本 tail）/ streaming push（当前轮询）
-- Discover 未接远端 formulae.brew.sh API（用本地 4664 formula 目录）
 
 ## 构建与安装
 
@@ -58,6 +63,16 @@ bash build-all.sh
 
 - 签名工程：`~/.app-installer/projects/com.social4hyq.brewo`
 - HAP 产物：`dist/brewo-signed.hap`
+
+### Harbor 托管 Harmonybrew 执行端
+
+安装版的 `brewo-app` formula 使用标准的 `service do`。安装程序一次性配对并将生成的 unit 注册到 Harbor。开发版可用同一方式装机并注册本地 unit：
+
+```sh
+BREWO_REGISTER_HARBOR=1 bash build-all.sh
+```
+
+在鸿蒙的应用启动管理中启用 Harbor 开机启动后，Brewo 可直接从桌面打开。执行端监听 `127.0.0.1:19877`。在 Brewo 的「配置 → Tap 信任」授权或撤销 tap 或 formula。Harmonybrew 将信任记录保存在 Harbor 私有目录中，HiShell 保持使用自己的配置。
 
 ## 数据文件
 
@@ -73,7 +88,7 @@ brew info --installed --json=v2 > /tmp/all.json
 
 - **P0（本阶段）** 只读仪表盘 ✅
 - **P1** 长任务执行层（native job helper：退出码回写 / 进程组取消 / stdout 回流）
-- **P2** 发现页接本地 4664 formula 目录
+- **P2** 发现页接 Harmonybrew 在线目录 ✅
 - **P3** Console 富文本、Doctor 实时诊断
 
 ## 合规

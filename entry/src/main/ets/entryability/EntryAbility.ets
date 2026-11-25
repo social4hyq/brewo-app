@@ -2,13 +2,22 @@ import UIAbility from '@ohos.app.ability.UIAbility';
 import window from '@ohos.window';
 import hilog from '@ohos.hilog';
 import { BusinessError } from '@ohos.base';
+import { APPEARANCE_STORAGE, Appearance, applyAppearance, loadAppearance } from '../theme/Appearance';
+import { configureBrewHost } from '../data/BrewHost';
 
 const TAG = 'Brewo';
 
-// 第一阶段：纯 UI 复刻，无 native 桥 / 无 IPC / 无托盘。
-// 后续接入 brew 命令时，在此处初始化 native helper 与命令中心。
 export default class EntryAbility extends UIAbility {
+  private appearance: Appearance = Appearance.System;
+
   onCreate(): void {
+    configureBrewHost(this.context.filesDir);
+    try {
+      this.appearance = loadAppearance(this.context);
+    } catch (error) {
+      hilog.warn(0x0000, TAG, 'Could not read saved appearance');
+    }
+    AppStorage.setOrCreate(APPEARANCE_STORAGE, this.appearance);
     hilog.info(0x0000, TAG, 'Brewo onCreate');
   }
 
@@ -20,6 +29,12 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(0x0000, TAG, 'loadContent ok');
+      try {
+        applyAppearance(this.context, this.appearance);
+      } catch (error) {
+        AppStorage.setOrCreate(APPEARANCE_STORAGE, Appearance.System);
+        hilog.warn(0x0000, TAG, 'Could not apply saved appearance');
+      }
 
       // 横屏 PC 窗口：设置合理初始尺寸
       try {
