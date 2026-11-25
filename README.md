@@ -4,7 +4,20 @@
 
 > 名称来源：Homebrew 的安装目录就叫 Brewo（酒窖）。
 
-## 当前阶段：Phase 2 — 实时 brew 数据（P1）
+## 当前版本：v0.2.0 — BrewUI Homebrew-7 UI 对齐
+
+基于用户提供的 13 张真实 BrewUI H7 截图,对界面做了逐项对齐:
+- 侧边栏线框图标(替换彩色 emoji)、CTA 按钮改系统蓝
+- 包行类型图标(橙 FORMULA / 蓝 CASK)、OUTDATED 徽章 + 版本箭头
+- 详情面板:No selection 空状态、Upgrade/Uninstall 按状态切换、blocking uninstall、Terminal command 卡片
+- Upgrades:全局 brew upgrade 框、蓝色 Upgrade All、Everything up to date 空状态
+- Discover:Trending、N packages match、Popular 分组、installs(30d)、搜索焦点环
+- Doctor:三栏、Copy output/Run Again、大绿勾空状态、issue 列表 + 详情
+- 卸载确认对话框、Console 绿点历史 + Save/Copy/Clear + Ready 栏
+
+---
+
+## 历史阶段：Phase 2 — 实时 brew 数据（P1）
 
 已完成：
 - 6 个页面，布局与视觉对齐 BrewUI：Installed / Upgrades / Discover / Services / Doctor / Configuration
