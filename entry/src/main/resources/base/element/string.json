@@ -1,0 +1,20 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Brewo"
+    },
+    {
+      "name": "module_desc",
+      "value": "Homebrew package manager for HarmonyOS"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Brewo - Homebrew GUI"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Brewo"
+    }
+  ]
+}
