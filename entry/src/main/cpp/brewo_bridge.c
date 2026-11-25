@@ -139,13 +139,14 @@ static void ensure_parent_dir(const char *filepath) {
 }
 
 /* 孙进程写自己的 pidfile（纯 syscall） */
-static void write_pidfile(const char *pidfile) {
+static int write_pidfile(const char *pidfile) {
   int fd = open(pidfile, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-  if (fd < 0) return;
+  if (fd < 0) return -1;
   char buf[32];
   int len = snprintf(buf, sizeof(buf), "%d", (int)getpid());
-  if (len > 0) write(fd, buf, (size_t)len);
+  ssize_t written = len > 0 ? write(fd, buf, (size_t)len) : -1;
   close(fd);
+  return written == len ? 0 : -1;
 }
 
 /* spawn(binPath, argsJson, logPath, pidfile, envJson) -> number
@@ -186,17 +187,28 @@ static napi_value Spawn(napi_env env, napi_callback_info info) {
   for (int i = 0; i < argc_n; i++) argvp[i + 1] = argv[i];
   argvp[argc_n + 1] = NULL;
 
+  int ready[2];
+  if (pipe(ready) < 0) {
+    napi_throw_error(env, NULL, "could not create spawn pipe");
+    return NULL;
+  }
   pid_t pid = fork();
   if (pid < 0) {
+    close(ready[0]);
+    close(ready[1]);
     napi_throw_error(env, NULL, "fork failed");
     return NULL;
   }
   if (pid == 0) {
-    setsid();
+    close(ready[0]);
     pid_t pid2 = fork();
     if (pid2 < 0) _exit(1);
     if (pid2 > 0) _exit(0);  // 中间进程退出，孙进程被 init 收养
-    if (pidfile[0]) { ensure_parent_dir(pidfile); write_pidfile(pidfile); }
+    if (setsid() < 0) _exit(1);  // pidfile 中的 PID 同时是取消任务使用的进程组 ID。
+    if (pidfile[0]) {
+      ensure_parent_dir(pidfile);
+      if (write_pidfile(pidfile) < 0) _exit(1);
+    }
     if (log[0]) ensure_parent_dir(log);
     int fd = open(log, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
@@ -209,11 +221,22 @@ static napi_value Spawn(napi_env env, napi_callback_info info) {
     char *envp[MAX_ENVS + 1];
     for (int i = 0; i < envn; i++) envp[i] = envbuf[i];
     envp[envn] = NULL;
+    if (write(ready[1], "1", 1) != 1) _exit(1);
+    close(ready[1]);
     execve(bin, argvp, envp);
     _exit(127);
   }
-  int status;
-  waitpid(pid, &status, 0);
+  // Wait for the detached child to establish its process group and publish its PID.
+  close(ready[1]);
+  char started;
+  ssize_t received;
+  do { received = read(ready[0], &started, 1); } while (received < 0 && errno == EINTR);
+  close(ready[0]);
+  while (waitpid(pid, NULL, 0) < 0 && errno == EINTR) {}
+  if (received != 1) {
+    napi_throw_error(env, NULL, "could not start detached process");
+    return NULL;
+  }
   napi_value ret;
   napi_create_int32(env, 1, &ret);   // 1 = started
   return ret;

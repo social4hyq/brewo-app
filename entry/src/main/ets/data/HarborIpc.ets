@@ -9,11 +9,15 @@ const TAG = 'BrewoHarborIpc';
 const HOST = '127.0.0.1';
 const PORT = 19876;
 const TOKEN_FILE = '/storage/Users/currentUser/.config/harbor/ipc.conf';
+const APPS_FILE = '/storage/Users/currentUser/.config/harbor/apps.json';
 
 export interface HarborService {
   name: string;
   pid: number;
   status: string;   // started | stopped | none | disabled
+  unit: string;
+  log: string;
+  timed: boolean;
 }
 
 function readToken(): string {
@@ -28,6 +32,21 @@ function readToken(): string {
 }
 
 interface SvcRaw { name?: string; pid?: number; status?: string; }
+interface HarborApp { name?: string; unit?: string; log?: string; timer?: object; }
+interface HarborConfig { apps?: HarborApp[]; }
+
+function readServiceConfig(): HarborApp[] {
+  try { return (JSON.parse(fileIo.readTextSync(APPS_FILE)) as HarborConfig).apps ?? []; }
+  catch (error) { return []; }
+}
+
+function logPath(app: HarborApp | undefined): string {
+  if (!app?.unit) return app?.log ?? '';
+  try {
+    const match = /^\s*Standard(?:Output|Error)\s*=\s*append:(.+)$/m.exec(fileIo.readTextSync(app.unit));
+    return match?.[1]?.trim() ?? app.log ?? '';
+  } catch (error) { return app.log ?? ''; }
+}
 
 // 查询 Harbor 服务列表；失败返回空数组（Harbor 未启动/未授权时优雅降级）
 export async function queryServices(): Promise<HarborService[]> {
@@ -57,8 +76,11 @@ export async function queryServices(): Promise<HarborService[]> {
       try {
         const arr = JSON.parse(json) as SvcRaw[];
         const out: HarborService[] = [];
+        const config = readServiceConfig();
         for (const s of arr) {
-          out.push({ name: s.name ?? '', pid: Number(s.pid ?? 0), status: s.status ?? 'none' });
+          const app = config.find((item: HarborApp) => item.name === s.name);
+          out.push({ name: s.name ?? '', pid: Number(s.pid ?? 0), status: s.status ?? 'none',
+            unit: app?.unit ?? '', log: logPath(app), timed: app?.timer !== undefined });
         }
         finish(out);
       } catch (e) {

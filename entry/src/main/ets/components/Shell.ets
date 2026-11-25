@@ -1,142 +1,165 @@
-// 主窗口壳：侧边栏 + 功能页 + 底部 Console（对齐 BrewUI MainWindowView 三栏布局）
+import pasteboard from '@ohos.pasteboard';
 import { C, L, F } from '../theme/Tokens';
 
-export enum Page {
-  Installed,
-  Upgrades,
-  Discover,
-  Services,
-  Doctor,
-  Configuration
-}
+export enum Page { Installed, Upgrades, Discover, Services, Doctor, Configuration }
 
-export interface NavItem {
-  page: Page;
-  title: string;
-  icon: string;   // SF Symbols 线框风格的单色 Unicode 近似（避免彩色 emoji）
-}
+interface NavItem { page: Page; title: string; icon: string; }
 
-export const NAV_ITEMS: NavItem[] = [
-  { page: Page.Installed, title: 'Installed', icon: '▣' },   // cube.box.fill
-  { page: Page.Upgrades, title: 'Upgrades', icon: '⇧' },     // arrow.up.circle
-  { page: Page.Discover, title: 'Discover', icon: '⌕' },     // magnifyingglass
-  { page: Page.Services, title: 'Services', icon: '▤' },     // server.rack
-  { page: Page.Doctor, title: 'Doctor', icon: '⚕' },         // stethoscope
-  { page: Page.Configuration, title: 'Configuration', icon: '⚙' }, // gearshape
+const NAV_ITEMS: NavItem[] = [
+  { page: Page.Installed, title: '已安装', icon: '▣' },
+  { page: Page.Upgrades, title: '更新看板', icon: '⇧' },
+  { page: Page.Discover, title: '发现', icon: '⌕' },
+  { page: Page.Services, title: '服务', icon: '▤' },
+  { page: Page.Doctor, title: 'Doctor 诊断', icon: '✚' },
+  { page: Page.Configuration, title: '配置', icon: '⚙' },
 ];
 
-// 侧边栏：220pt，选中项 brandTint 背景 + 琥珀色文字
+export async function copyText(text: string): Promise<void> {
+  await pasteboard.getSystemPasteboard().setData(pasteboard.createData(pasteboard.MIMETYPE_TEXT_PLAIN, text));
+}
+
 @Component
 export struct Sidebar {
   @Link current: Page;
   @Prop upgradeCount: number = 0;
 
   build() {
-    Column() {
-      // 顶部红黄绿窗控 + 侧栏切换（视觉近似 macOS）
-      Row({ space: 8 }) {
-        Circle({ width: 12, height: 12 }).fill('#FF5F57')
-        Circle({ width: 12, height: 12 }).fill('#FEBC2E')
-        Circle({ width: 12, height: 12 }).fill('#28C840')
-        Blank()
-        Text('▣').fontSize(16).fontColor(C.textSecondary)
-      }
-      .width('100%').padding({ left: L.md, right: L.md, top: L.lg, bottom: L.lg })
+    Column({ space: 5 }) {
+      Row({ space: L.sm }) {
+        Text('B').fontSize(17).fontWeight(FontWeight.Bold).fontColor(Color.White)
+          .width(34).height(34).textAlign(TextAlign.Center).borderRadius(9)
+          .linearGradient({ angle: 135, colors: [[C.ctaBlue, 0], [C.brandGradient, 1]] })
+        Column({ space: 1 }) {
+          Text('Brewo').fontSize(19).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+          Text('Harmonybrew').fontSize(F.caption2).fontColor(C.textTertiary)
+        }.alignItems(HorizontalAlign.Start)
+      }.width('100%').padding({ left: L.xs, top: L.md, bottom: L.xl })
 
-      // 导航项
       ForEach(NAV_ITEMS, (item: NavItem) => {
         Row({ space: L.sm }) {
-          Text(item.icon).fontSize(15).width(L.iconWidth).textAlign(TextAlign.Center)
-            .fontColor(this.current === item.page ? C.textBrand : C.textSecondary)
+          Text(item.icon).fontSize(18).width(L.iconWidth).textAlign(TextAlign.Center)
+            .fontColor(this.current === item.page ? C.selectionInk : C.textTertiary)
           Text(item.title).fontSize(F.body).fontWeight(FontWeight.Medium)
-            .fontColor(this.current === item.page ? C.textBrand : C.textPrimary)
-          Blank()
+            .fontColor(this.current === item.page ? C.selectionInk : C.textSecondary)
+            .layoutWeight(1)
           if (item.page === Page.Upgrades && this.upgradeCount > 0) {
-            Text(this.upgradeCount.toString())
-              .fontSize(F.caption2).fontColor(C.textOnBrand)
-              .backgroundColor(C.brandPrimary).borderRadius(9)
-              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+            Text(this.upgradeCount.toString()).fontSize(F.caption2).fontColor(C.textPrimary)
+              .padding({ left: 6, right: 6, top: 2, bottom: 2 })
+              .backgroundColor(C.brandTint).borderRadius(6)
           }
-        }
-        .width('100%')
-        .padding({ left: L.sm, right: L.md, top: L.sm, bottom: L.sm })
-        .borderRadius(L.radiusMd)
-        .backgroundColor(this.current === item.page ? C.brandTint : Color.Transparent)
-        .margin({ bottom: L.xs })
-        .onClick(() => { this.current = item.page; })
-
-      })
-
+        }.width('100%').height(42).padding({ left: L.sm, right: L.sm }).borderRadius(L.radiusMd)
+        .backgroundColor(this.current === item.page ? C.selectionFill : Color.Transparent)
+        .accessibilitySelected(this.current === item.page)
+        .focusable(true).onClick(() => { this.current = item.page; })
+      }, (item: NavItem) => item.title)
       Blank()
-    }
-    .width(L.sidebarWidth)
-    .height('100%')
-    .padding({ left: L.sm, right: L.sm })
-    .backgroundColor(C.surface)
+    }.width(L.sidebarWidth).height('100%').padding(L.md)
+    .linearGradient({ angle: 180, colors: [[C.surfaceElevated, 0], [C.surface, 1]] })
     .border({ width: { right: 1 }, color: C.borderSeparator })
   }
 }
 
-// 底部 Console 折叠面板
+function outputColor(line: string): ResourceColor {
+  if (/^(✕|Error:|error:)/.test(line)) return C.codeError;
+  if (/^(Warning:|警告)/.test(line)) return C.statusWarning;
+  if (line.startsWith('✓')) return C.statusSuccess;
+  if (/^(\$|==>|→)/.test(line)) return C.codeCommand;
+  return C.codeDefault;
+}
+
 @Component
 export struct ConsolePanel {
+  @Prop @Watch('updateTranscript') consoleText: string = '';
+  @Prop @Watch('updatePhase') phase: string = '';
+  @Prop label: string = '';
+  onCancel: () => void = () => {};
   @State expanded: boolean = false;
-  @Link consoleText: string;
+  @State follow: boolean = true;
+  @State paused: boolean = false;
+  @State transcript: string = '';
+  @State cleared: string = '';
+  @State copyLabel: string = '复制';
+  private scroller: Scroller = new Scroller();
+
+  aboutToAppear(): void { this.updateTranscript(); }
+
+  private updatePhase(): void {
+    if (this.phase === 'running') this.expanded = true;
+  }
+
+  private updateTranscript(): void {
+    if (!this.paused) {
+      this.transcript = this.consoleText === this.cleared ? '' : this.consoleText;
+      this.copyLabel = '复制';
+    }
+  }
+
+  private status(): string {
+    switch (this.phase) {
+      case 'running': return '正在运行';
+      case 'done': return '已完成';
+      case 'failed': return '执行失败';
+      case 'cancelled': return '已取消';
+      default: return '就绪';
+    }
+  }
 
   build() {
     Column() {
-      // 标题条
-      Row({ space: L.sm }) {
-        Text('⌄').fontSize(12).fontColor(C.textSecondary)
-          .rotate({ angle: this.expanded ? 180 : 0 })
-          .onClick(() => { this.expanded = !this.expanded; })
-        Text('Console').fontSize(F.callout).fontWeight(FontWeight.Medium).fontColor(C.textPrimary)
-        Blank()
-        Text('brew').fontSize(F.caption2).fontColor(C.textTertiary)
-      }
-      .width('100%').padding({ left: L.md, right: L.md, top: L.sm, bottom: L.sm })
-      .backgroundColor(C.surfaceRecessed)
-      .onClick(() => { this.expanded = !this.expanded; })
+      Row({ space: 6 }) {
+        Button((this.expanded ? '⌄  ' : '⌃  ') + '控制台', { type: ButtonType.Normal })
+          .fontSize(F.body).fontWeight(FontWeight.Medium).fontColor(C.textPrimary)
+          .height(30).backgroundColor(Color.Transparent).onClick(() => { this.expanded = !this.expanded; })
+        Circle({ width: 6, height: 6 }).fill(this.phase === 'failed' ? C.statusError :
+          this.phase === 'running' || this.phase === 'done' ? C.statusSuccess : C.textTertiary)
+        Text(this.status()).fontSize(F.caption).fontColor(C.textSecondary)
+        Text(this.label).fontSize(F.caption).fontColor(C.textTertiary).maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        if (this.phase === 'running') {
+          Button('取消任务', { type: ButtonType.Normal }).consoleTool()
+            .fontColor(C.statusError).backgroundColor(C.statusErrorSubtle).onClick(() => { this.onCancel(); })
+        }
+        if (this.expanded) {
+          Button(this.copyLabel, { type: ButtonType.Normal }).consoleTool()
+            .enabled(this.transcript.length > 0).onClick(() => {
+              copyText(this.transcript).then(() => { this.copyLabel = '已复制'; })
+                .catch(() => { this.copyLabel = '复制失败'; });
+            })
+          Button('清空', { type: ButtonType.Normal }).consoleTool()
+            .enabled(this.transcript.length > 0)
+            .onClick(() => { this.cleared = this.consoleText; this.transcript = ''; })
+          Button(this.paused ? '继续显示' : '暂停显示', { type: ButtonType.Normal }).consoleTool()
+            .onClick(() => { this.paused = !this.paused; this.updateTranscript(); })
+          Button(this.follow ? '自动滚动 ✓' : '自动滚动', { type: ButtonType.Normal }).consoleTool()
+            .onClick(() => {
+              this.follow = !this.follow;
+              if (this.follow) this.scroller.scrollEdge(Edge.Bottom);
+            })
+        }
+      }.width('100%').height(40).padding({ left: L.xs, right: L.sm })
 
       if (this.expanded) {
-        // 命令历史行 + 操作（对齐 BrewUI Console 顶部条）
-        Row({ space: L.sm }) {
-          Circle({ width: 7, height: 7 }).fill(C.statusSuccess)
-          Text('brew …').fontSize(F.codeSmall).fontFamily('monospace').fontColor(C.outdated).layoutWeight(1)
-            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          Text('Save').fontSize(F.caption2).fontColor(C.textSecondary)
-          Text('Copy').fontSize(F.caption2).fontColor(C.textSecondary)
-          Text('✓ Cleared').fontSize(F.caption2).fontColor(C.statusSuccess)
-        }.width('100%').padding({ left: L.md, right: L.md, top: L.xs, bottom: L.xs })
-         .backgroundColor(C.surface)
-
-        Scroll() {
-          Column() {
-            Text(this.consoleText)
-              .fontSize(F.code).fontFamily('monospace')
-              .fontColor(C.codeDefault)
-              .textAlign(TextAlign.Start)
-          }
-          .padding(L.md)
-          .width('100%')
-        }
-        .height(180)
-        .backgroundColor(C.terminal)
+        Scroll(this.scroller) {
+          Column({ space: 3 }) {
+            if (this.transcript.length === 0) {
+              Text('暂无输出').fontSize(F.code).fontColor(C.textTertiary)
+            } else {
+              ForEach(this.transcript.trimEnd().split('\n').slice(-200), (line: string) => {
+                Text(line).fontSize(F.code).fontFamily('monospace').fontColor(outputColor(line))
+                  .width('100%').copyOption(CopyOptions.LocalDevice)
+              }, (line: string, index: number) => index + ':' + line)
+            }
+          }.width('100%').padding(L.md).alignItems(HorizontalAlign.Start)
+          .onAreaChange(() => { if (this.follow) this.scroller.scrollEdge(Edge.Bottom); })
+        }.width('100%').height(148).align(Alignment.TopStart).backgroundColor(C.terminal)
       }
-
-      // 底部状态栏（Ready + 展开箭头）
-      Row({ space: L.sm }) {
-        Circle({ width: 7, height: 7 }).fill(C.textTertiary)
-        Text('Ready').fontSize(F.caption2).fontColor(C.textSecondary)
-        Blank()
-        Text(this.expanded ? '⌄' : '⌃').fontSize(12).fontColor(C.textSecondary)
-          .onClick(() => { this.expanded = !this.expanded; })
-      }.width('100%').padding({ left: L.md, right: L.md, top: 2, bottom: 2 })
-       .backgroundColor(C.surface)
-       .onClick(() => { this.expanded = !this.expanded; })
-    }
-    .width('100%')
-    .backgroundColor(C.surface)
-    .border({ width: { top: 1 }, color: C.borderSeparator })
+    }.width('100%').backgroundColor(C.surfaceElevated)
+    .border({ width: 1, color: C.borderDefault, radius: L.radiusMd }).clip(true)
   }
+}
+
+@Extend(Button)
+function consoleTool() {
+  .fontSize(F.caption).fontColor(C.textSecondary).height(26).borderRadius(5)
+  .backgroundColor(C.surfaceRecessed).padding({ left: 8, right: 8 })
 }

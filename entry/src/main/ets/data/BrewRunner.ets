@@ -1,140 +1,6 @@
-// BrewRunner：通过 native 桥执行 brew 只读命令，输出重定向到沙箱日志，再读回解析。
-// 非阻塞：spawn 立即返回；UI 用 isRunning() 轮询，done() 读结果。
-import brewoBridge from 'libbrewo_bridge.so';
-import fileIo from '@ohos.file.fs';
 import hilog from '@ohos.hilog';
 
 const TAG = 'BrewoBrew';
-export const CACHE = '/data/storage/el2/base/cache/brewo';
-// 必须通过 symlink 调用：brew 靠自身路径推导 prefix，直接调 Homebrew/bin/brew 会算错 brewo
-const BREW = '/storage/Users/currentUser/.harmonybrew/bin/brew';
-const ZSH = '/usr/bin/zsh';
-
-function brewEnv(): Record<string, string> {
-  return {
-    'HOME': '/storage/Users/currentUser',
-    'USER': 'currentUser',
-    'LOGNAME': 'currentUser',
-    'SHELL': ZSH,
-    'PATH': '/storage/Users/currentUser/.harmonybrew/bin:/storage/Users/currentUser/.harmonybrew/sbin:/usr/bin:/bin:/usr/sbin:/sbin',
-    'TMPDIR': '/data/storage/el2/base/cache',
-    'HOMEBREW_TEMP': '/data/storage/el2/base/cache',
-    'LANG': 'en_US.UTF-8',
-    'TERM': 'dumb',
-    'HOMEBREW_NO_AUTO_UPDATE': '1',
-    'HOMEBREW_NO_COLOR': '1',
-    'HOMEBREW_NO_ANALYTICS': '1',
-  };
-}
-
-// 单引号包裹 shell 参数（内部单引号用 '\'' 转义）
-function shellQuote(s: string): string {
-  return "'" + s.replace(/'/g, "'\\''") + "'";
-}
-
-interface JobPaths { log: string; pidfile: string; }
-function paths(jobId: string): JobPaths {
-  const p: JobPaths = { log: CACHE + '/' + jobId + '.log', pidfile: CACHE + '/' + jobId + '.pid' };
-  return p;
-}
-
-function ensureDir(): void {
-  try { if (!fileIo.accessSync(CACHE)) fileIo.mkdirSync(CACHE, true); } catch (e) {}
-}
-
-// 启动命令（非阻塞，立即返回）。args: brew 参数，如 ['info','--installed','--json=v2']
-export function start(args: string[], jobId: string): boolean {
-  ensureDir();
-  const p = paths(jobId);
-  try { if (fileIo.accessSync(p.log)) fileIo.unlinkSync(p.log); } catch (e) {}
-  try { if (fileIo.accessSync(p.pidfile)) fileIo.unlinkSync(p.pidfile); } catch (e) {}
-  // brew wrapper 要求 cwd 对当前用户可读；HAP 的 cwd 不满足，用 `cd <home> && exec brew` 绕过。
-  // 同时 --no-rcs --no-global-rcs 隔离 ~/.zshenv 噪声（对齐 BrewUI）。
-  const brewCmd: string = 'cd /storage/Users/currentUser && exec ' + BREW + ' ' + args.map((a) => shellQuote(a)).join(' ');
-  const fullArgs: string[] = ['--no-rcs', '--no-global-rcs', '-c', brewCmd];
-  const argsJson: string = JSON.stringify(fullArgs) as string;
-  const envJson: string = JSON.stringify(brewEnv()) as string;
-  try {
-    const r: number = brewoBridge.spawn(ZSH, argsJson, p.log, p.pidfile, envJson);
-    hilog.info(0x0000, TAG, 'start %{public}s -> %{public}d', jobId, r);
-    return true;
-  } catch (e) {
-    hilog.error(0x0000, TAG, 'start %{public}s failed', jobId);
-    return false;
-  }
-}
-
-// 是否仍在运行
-export function isRunning(jobId: string): boolean {
-  const p = paths(jobId);
-  return brewoBridge.pidFromPidfile(p.pidfile) > 0;
-}
-
-// 是否已启动过（防止未 spawn 就显示停止）
-export function wasStarted(jobId: string): boolean {
-  return brewoBridge.pidfileExists(paths(jobId).pidfile) === 1;
-}
-
-// 读输出日志
-export function output(jobId: string): string {
-  const p = paths(jobId);
-  try {
-    if (fileIo.accessSync(p.log)) return fileIo.readTextSync(p.log);
-  } catch (e) {}
-  return '';
-}
-
-// ---- 写命令（install/uninstall/upgrade）：长任务 + 退出码 + 取消 ----
-function exitFile(jobId: string): string { return CACHE + '/' + jobId + '.exit'; }
-
-// 启动写命令：用 shell 包装，brew 结束后把退出码写入 .exit 文件；stdin 接 /dev/null 避免交互卡死。
-// 非交互 flags：--quiet 减少输出；HOMEBREW_NO_* 关分析/颜色/自动更新。
-export function startWrite(args: string[], jobId: string): boolean {
-  ensureDir();
-  const p = paths(jobId);
-  const ef = exitFile(jobId);
-  try { if (fileIo.accessSync(p.log)) fileIo.unlinkSync(p.log); } catch (e) {}
-  try { if (fileIo.accessSync(p.pidfile)) fileIo.unlinkSync(p.pidfile); } catch (e) {}
-  try { if (fileIo.accessSync(ef)) fileIo.unlinkSync(ef); } catch (e) {}
-
-  // 拼 shell 命令：cd home && brew <args> < /dev/null; echo $? > exitfile
-  const quoted = args.map((a) => shellQuote(a)).join(' ');
-  const cmd: string = 'cd /storage/Users/currentUser; ' + BREW + ' ' + quoted +
-    ' < /dev/null; echo $? > ' + shellQuote(ef);
-  const fullArgs: string[] = ['--no-rcs', '--no-global-rcs', '-c', cmd];
-  const argsJson: string = JSON.stringify(fullArgs) as string;
-  const envJson: string = JSON.stringify(brewEnv()) as string;
-  try {
-    const r: number = brewoBridge.spawn(ZSH, argsJson, p.log, p.pidfile, envJson);
-    hilog.info(0x0000, TAG, 'startWrite %{public}s -> %{public}d', jobId, r);
-    return true;
-  } catch (e) {
-    hilog.error(0x0000, TAG, 'startWrite %{public}s failed', jobId);
-    return false;
-  }
-}
-
-// 读退出码：文件存在返回整数，不存在返回 -1（未完成/未启动）
-export function exitCode(jobId: string): number {
-  const ef = exitFile(jobId);
-  try {
-    if (fileIo.accessSync(ef)) {
-      const t = fileIo.readTextSync(ef).trim();
-      const n = parseInt(t, 10);
-      return isNaN(n) ? -2 : n;
-    }
-  } catch (e) {}
-  return -1;
-}
-
-// 取消任务：杀整个进程组（SIGTERM→SIGKILL 兜底）
-export function cancel(jobId: string): void {
-  const pid: number = brewoBridge.pidFromPidfile(paths(jobId).pidfile);
-  if (pid > 1) {
-    brewoBridge.killGroup(pid, 15);
-    brewoBridge.killGroup(pid, 9);
-  }
-}
 
 // ---- brew info --json=v2 解析（最小字段）----
 interface InstRaw { version?: string; time?: number; poured_from_bottle?: boolean; installed_on_request?: boolean; }
@@ -142,9 +8,19 @@ interface VersionsRaw { stable?: string; }
 interface FormulaRaw {
   name?: string; full_name?: string; tap?: string; desc?: string; license?: string; homepage?: string;
   outdated?: boolean; keg_only?: boolean; pinned?: boolean; caveats?: string;
-  dependencies?: string[]; versions?: VersionsRaw; installed?: InstRaw[];
+  dependencies?: string[]; versions?: VersionsRaw; installed?: InstRaw[]; revision?: number;
 }
-interface InfoJson { formulae?: FormulaRaw[]; casks?: FormulaRaw[]; }
+export interface InstalledCask { token?: string; tap?: string; installed?: string; }
+interface InfoJson { formulae?: FormulaRaw[]; casks?: InstalledCask[]; }
+
+export function parseInstalledCasks(json: string): InstalledCask[] {
+  try {
+    const data = JSON.parse(json) as InfoJson;
+    return Array.isArray(data.casks) ? data.casks : [];
+  } catch (error) {
+    return [];
+  }
+}
 
 export interface LivePkg {
   name: string; fullName: string; tap: string; desc: string; license: string; homepage: string;
@@ -153,14 +29,17 @@ export interface LivePkg {
   caveats: string; deps: string[];
 }
 
-export function parseInfoJson(json: string): LivePkg[] {
+export function parseInfoJson(json: string): LivePkg[] | undefined {
   const out: LivePkg[] = [];
-  if (json.length === 0) return out;
+  if (json.length === 0) return undefined;
   try {
     const d = JSON.parse(json) as InfoJson;
-    const list = d.formulae ?? [];
+    if (!Array.isArray(d.formulae)) return undefined;
+    const list = d.formulae;
     for (const f of list) {
       const inst = (f.installed && f.installed.length > 0) ? f.installed[0] : undefined;
+      const stable = f.versions?.stable ?? '';
+      const revision = f.revision ?? 0;
       out.push({
         name: f.name ?? '',
         fullName: f.full_name ?? '',
@@ -169,7 +48,7 @@ export function parseInfoJson(json: string): LivePkg[] {
         license: f.license ?? '',
         homepage: f.homepage ?? '',
         installedVersion: inst?.version ?? '',
-        latestVersion: f.versions?.stable ?? '',
+        latestVersion: stable && revision > 0 ? stable + '_' + revision : stable,
         outdated: f.outdated === true,
         poured: inst?.poured_from_bottle === true,
         installTime: inst?.time ?? 0,
@@ -182,6 +61,7 @@ export function parseInfoJson(json: string): LivePkg[] {
     }
   } catch (e) {
     hilog.error(0x0000, TAG, 'parseInfoJson failed');
+    return undefined;
   }
   out.sort((a, b) => a.name < b.name ? -1 : (a.name > b.name ? 1 : 0));
   return out;
@@ -200,11 +80,11 @@ export interface DoctorResult {
 interface DoctorFindingRaw { tier?: number; text?: string; affects?: string[]; }
 interface DoctorJson { tier?: number; findings?: DoctorFindingRaw[]; }
 
-export function parseDoctorJson(json: string): DoctorResult {
-  const empty: DoctorResult = { tier: 0, findings: [] };
-  if (json.length === 0) return empty;
+export function parseDoctorJson(json: string): DoctorResult | undefined {
+  if (json.length === 0) return undefined;
   try {
     const d = JSON.parse(json) as DoctorJson;
+    if (!Array.isArray(d.findings)) return undefined;
     const findings: DoctorFinding[] = [];
     for (const f of (d.findings ?? [])) {
       findings.push({
@@ -216,7 +96,7 @@ export function parseDoctorJson(json: string): DoctorResult {
     return { tier: Number(d.tier ?? 0), findings: findings };
   } catch (e) {
     hilog.error(0x0000, TAG, 'parseDoctorJson failed');
-    return empty;
+    return undefined;
   }
 }
 

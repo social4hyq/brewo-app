@@ -1,12 +1,15 @@
-import { C } from '../theme/Tokens';
+import { C, L } from '../theme/Tokens';
+import { APPEARANCE_STORAGE, Appearance, applyAppearance, saveAppearance } from '../theme/Appearance';
+import common from '@ohos.app.ability.common';
 import { Sidebar, ConsolePanel, Page } from '../components/Shell';
 import { InstalledPage, UpgradesPage, DiscoverPage } from '../components/PackagePages';
 import { ServicesPage, DoctorPage, ConfigurationPage } from '../components/OtherPages';
 import {
-  start, isRunning, output, exitCode, cancel, startWrite,
-  parseInfoJson, parseDoctorJson, parseConfig,
-  LivePkg, DoctorResult, ConfigItem,
+  parseInfoJson, parseDoctorJson, parseConfig, parseInstalledCasks,
+  LivePkg, DoctorResult, ConfigItem, InstalledCask,
 } from '../data/BrewRunner';
+import { CataloguePackage } from '../data/BrewCatalogue';
+import { BrewJobStatus, cancelJob, startJob, waitForBrewHost, waitForJob } from '../data/BrewHost';
 import hilog from '@ohos.hilog';
 import { queryServices, HarborService } from '../data/HarborIpc';
 
@@ -15,9 +18,13 @@ import { queryServices, HarborService } from '../data/HarborIpc';
 struct Index {
   @State current: Page = Page.Installed;
   @State packages: LivePkg[] = [];
+  @State casks: InstalledCask[] = [];
   @State loaded: boolean = false;
+  @State inventoryError: boolean = false;
   @State doctor: DoctorResult = { tier: 0, findings: [] };
   @State doctorLoaded: boolean = false;
+  @State doctorValid: boolean = false;
+  @State doctorOutput: string = '';
   @State config: ConfigItem[] = [];
   @State configLoaded: boolean = false;
   @State consoleText: string = '$ brew …\n→ 正在读取实时数据…';
@@ -26,33 +33,55 @@ struct Index {
   // 写任务状态
   @State taskPhase: string = '';   // '' 空闲 | 'running' | 'done' | 'failed' | 'cancelled'
   @State taskLabel: string = '';
+  @State workspaceWidth: number = 0;
+  @StorageLink(APPEARANCE_STORAGE) appearance: Appearance = Appearance.System;
+  @State appearanceMessage: string = '';
+  @State appearanceSaving: boolean = false;
+  private writeJob: string = '';
+  private cancelling: boolean = false;
+  private readJobs: Set<string> = new Set<string>();
 
   private runJob(args: string[], id: string, done: (out: string) => void): void {
-    start(args, id);
-    const timer = setInterval(() => {
-      if (isRunning(id)) return;
-      clearInterval(timer);
-      done(output(id));
-    }, 500);
+    if (this.readJobs.has(id)) return;
+    this.readJobs.add(id);
+    startJob(args).then((job: string) => waitForJob(job, () => {})).then((result: BrewJobStatus) => {
+      this.readJobs.delete(id);
+      done(result.output);
+    }).catch((error: Error) => {
+      this.readJobs.delete(id);
+      done(error.message);
+    });
   }
 
-  // 刷新包 + doctor 数据（写命令完成后调用）
   private refreshData(): void {
     this.runJob(['info', '--installed', '--json=v2'], 'info-all', (out: string) => {
       const pkgs = parseInfoJson(out);
-      if (pkgs.length > 0) { this.packages = pkgs; this.loaded = true; }
+      this.inventoryError = pkgs === undefined;
+      if (pkgs !== undefined) {
+        this.packages = pkgs;
+        this.casks = parseInstalledCasks(out);
+        this.loaded = true;
+      }
+      if (this.taskPhase === '') {
+        this.consoleText = '$ brew info --installed --json=v2\n' +
+          (pkgs !== undefined ? '✓ 已读取 ' + pkgs.length + ' 个软件包' : '✕ 无法读取已安装的软件包\n' + out);
+      }
     });
   }
 
   private loadDoctor(): void {
     this.doctorLoaded = false;
     this.runJob(['doctor', '--json'], 'doctor', (out: string) => {
-      const d = parseDoctorJson(out);
-      if (out.length > 0) { this.doctor = d; this.doctorLoaded = true; }
+      this.doctorOutput = out;
+      const result = parseDoctorJson(out);
+      this.doctor = result ?? { tier: 0, findings: [] };
+      this.doctorValid = result !== undefined;
+      this.doctorLoaded = true;
     });
   }
 
   private loadHarborServices(): void {
+    this.harborLoaded = false;
     queryServices().then((svcs: HarborService[]) => {
       this.harborServices = svcs;
       this.harborLoaded = true;
@@ -62,72 +91,126 @@ struct Index {
 
   aboutToAppear(): void {
     this.loadHarborServices();
-    this.runJob(['info', '--installed', '--json=v2'], 'info-all', (out: string) => {
-      const pkgs = parseInfoJson(out);
-      if (pkgs.length > 0) { this.packages = pkgs; this.loaded = true; }
-      this.consoleText = '$ brew info --installed --json=v2\n→ ' + pkgs.length + ' formulae loaded';
-    });
+    waitForBrewHost().then(() => { this.reloadBrew(); }).catch(() => { this.reloadBrew(); });
+  }
+
+  private reloadBrew(): void {
+    this.refreshData();
     this.loadDoctor();
+    this.loadConfig();
+  }
+
+  private loadConfig(): void {
+    this.configLoaded = false;
     this.runJob(['config'], 'config', (out: string) => {
-      const c = parseConfig(out);
-      if (c.length > 0) { this.config = c; this.configLoaded = true; }
+      this.config = parseConfig(out);
+      this.configLoaded = true;
     });
   }
 
-  // 执行写命令：install / uninstall / upgrade
-  private runWrite(label: string, args: string[], jobId: string): void {
+  private async runWrite(label: string, args: string[], refreshInventory: boolean = true): Promise<void> {
+    if (this.taskPhase === 'running') return;
     this.taskLabel = label;
     this.taskPhase = 'running';
-    this.consoleText = '$ brew ' + args.join(' ') + '\n→ 执行中…';
-    startWrite(args, jobId);
-    let lastLog = '';
-    const timer = setInterval(() => {
-      const ec = exitCode(jobId);
-      // 实时 tail 日志
-      const log = output(jobId);
-      if (log.length > 0 && log !== lastLog) {
-        lastLog = log;
-        this.consoleText = '$ brew ' + args.join(' ') + '\n' + log;
-      }
-      if (ec < 0) return;  // 退出码文件未出现，仍在运行
-      clearInterval(timer);
-      if (ec === 0) {
+    const command = '$ brew ' + args.join(' ');
+    this.consoleText = command + '\n→ 执行中…';
+    try {
+      this.writeJob = await startJob(args);
+      const result = await waitForJob(this.writeJob, (status: BrewJobStatus) => {
+        if (status.output.length > 0) this.consoleText = command + '\n' + status.output;
+      });
+      if (result.cancelled) {
+        this.taskPhase = 'cancelled';
+        this.consoleText = command + '\n' + result.output + '\n已取消';
+      } else if (result.exitCode === 0) {
         this.taskPhase = 'done';
-        this.consoleText = '$ brew ' + args.join(' ') + '\n' + log + '\n✓ 完成 (exit 0)';
-        hilog.info(0, 'BrewoWrite', '%{public}s succeeded', jobId);
+        this.consoleText = command + '\n' + result.output + '\n✓ 完成 (exit 0)';
       } else {
         this.taskPhase = 'failed';
-        this.consoleText = '$ brew ' + args.join(' ') + '\n' + log + '\n✕ 失败 (exit ' + ec + ')';
-        hilog.warn(0, 'BrewoWrite', '%{public}s failed exit=%{public}d', jobId, ec);
+        this.consoleText = command + '\n' + result.output + '\n✕ 失败 (exit ' + result.exitCode + ')';
       }
-      this.refreshData();  // 完成后刷新包列表
-    }, 600);
+      if (refreshInventory) this.refreshData();
+    } catch (error) {
+      this.taskPhase = 'failed';
+      this.consoleText += '\n✕ ' + (error as Error).message;
+    } finally {
+      this.writeJob = '';
+    }
   }
 
   private doUninstall(p: LivePkg): void {
-    this.runWrite('卸载 ' + p.name, ['uninstall', '--formula', p.name], 'write-uninstall-' + p.name);
+    void this.runWrite('卸载 ' + p.name, ['uninstall', '--formula', p.fullName || p.name]);
+  }
+
+  private async installDiscovered(pkg: CataloguePackage): Promise<string> {
+    if (this.taskPhase === 'running') return 'busy';
+    await this.runWrite('安装 ' + pkg.displayName, ['install', '--' + pkg.kind, pkg.fullName]);
+    return this.taskPhase;
   }
   private doUpgrade(p: LivePkg): void {
-    this.runWrite('升级 ' + p.name, ['upgrade', '--formula', p.name], 'write-upgrade-' + p.name);
+    void this.runWrite('更新 ' + p.name, ['upgrade', '--formula', p.fullName || p.name]);
   }
-  private doUpgradeAll(): void {
-    this.runWrite('升级全部', ['upgrade', '--formula'], 'write-upgrade-all');
+  private doUpgradeSelected(packages: LivePkg[]): void {
+    if (packages.length === 0) return;
+    void this.runWrite('更新 ' + packages.length + ' 个软件包',
+      ['upgrade', '--formula'].concat(packages.map((p: LivePkg) => p.fullName || p.name)));
   }
-  private doCancel(): void {
-    // 取消所有可能的写任务 jobId（native killGroup 对不存在的 pid 无害）
-    for (const p of this.packages) {
-      cancel('write-uninstall-' + p.name);
-      cancel('write-upgrade-' + p.name);
+
+  private previewUpgrade(packages: LivePkg[]): void {
+    if (packages.length === 0) return;
+    void this.runWrite('预览 ' + packages.length + ' 个软件包的更新',
+      ['upgrade', '--dry-run', '--formula'].concat(packages.map((p: LivePkg) => p.fullName || p.name)),
+      false);
+  }
+  private async doCancel(): Promise<void> {
+    if (this.writeJob.length === 0 || this.cancelling) return;
+    this.cancelling = true;
+    try {
+      await cancelJob(this.writeJob);
+    } catch (error) {
+      this.consoleText += '\n✕ 取消请求失败：' + (error as Error).message;
+    } finally {
+      this.cancelling = false;
     }
-    cancel('write-upgrade-all');
-    this.taskPhase = 'cancelled';
-    this.consoleText = '$ brew …\n⏹ 已取消';
+  }
+
+  private changeTrust(target: string, grant: boolean): void {
+    const command = grant ? 'trust' : 'untrust';
+    const args = target.split('/').length === 3 ? [command, '--formula', target] : [command, target];
+    void this.runWrite((grant ? '信任 ' : '撤销信任 ') + target, args);
   }
 
   private upgradeCount(): number {
     let n = 0;
-    for (const p of this.packages) if (p.outdated) n++;
+    for (const p of this.packages) if (p.outdated && !p.pinned) n++;
     return n;
+  }
+
+  private async changeAppearance(value: Appearance): Promise<void> {
+    if (this.appearanceSaving || this.appearance === value) return;
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.appearanceMessage = '';
+    try {
+      applyAppearance(context, value);
+    } catch (error) {
+      this.appearanceMessage = '无法切换外观，请重试。';
+      return;
+    }
+    this.appearance = value;
+    this.appearanceSaving = true;
+    try {
+      await saveAppearance(context, value);
+    } catch (error) {
+      this.appearanceMessage = '外观已切换，未能保存到下次启动。';
+    } finally {
+      this.appearanceSaving = false;
+    }
+  }
+
+  @Builder
+  Diagnostics(compact: boolean) {
+    DoctorPage({ result: this.doctor, loaded: this.doctorLoaded, valid: this.doctorValid, rawOutput: this.doctorOutput,
+      compact: compact, widthAvailable: this.workspaceWidth, onRunAgain: () => { this.loadDoctor(); } })
   }
 
   build() {
@@ -135,44 +218,62 @@ struct Index {
       Row({ space: 0 }) {
         Sidebar({ current: this.current, upgradeCount: this.upgradeCount() })
 
-        Column({ space: 0 }) {
+        Column({ space: L.md }) {
           Column() {
             if (this.current === Page.Installed) {
               InstalledPage({
                 packages: this.packages,
+                loaded: this.loaded,
+                loadFailed: this.inventoryError,
                 onUninstall: (p: LivePkg) => { this.doUninstall(p); },
                 onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
                 taskPhase: this.taskPhase,
               })
             } else if (this.current === Page.Upgrades) {
-              UpgradesPage({
-                packages: this.packages,
-                onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
-                onUpgradeAll: () => { this.doUpgradeAll(); },
-                onRefresh: () => { this.refreshData(); },
-                onCancel: () => { this.doCancel(); },
-                taskPhase: this.taskPhase,
-              })
+              Row({ space: L.md }) {
+                Column() {
+                  UpgradesPage({
+                    packages: this.packages,
+                    loaded: this.loaded,
+                    loadFailed: this.inventoryError,
+                    onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
+                    onUpgradeSelected: (items: LivePkg[]) => { this.doUpgradeSelected(items); },
+                    onPreview: (items: LivePkg[]) => { this.previewUpgrade(items); },
+                    onRefresh: () => { this.reloadBrew(); },
+                    taskPhase: this.taskPhase,
+                  })
+                }.layoutWeight(1.15).height('100%')
+                if (this.workspaceWidth >= 840) {
+                  Column() { this.Diagnostics(true) }.layoutWeight(1).height('100%')
+                }
+              }.width('100%').height('100%')
             } else if (this.current === Page.Discover) {
-              DiscoverPage({ packages: this.packages })
+              DiscoverPage({ installed: this.packages, installedCasks: this.casks, widthAvailable: this.workspaceWidth,
+                taskRunning: this.taskPhase === 'running',
+                onInstall: (pkg: CataloguePackage) => this.installDiscovered(pkg) })
             } else if (this.current === Page.Services) {
               ServicesPage({
                 services: this.harborServices,
                 loaded: this.harborLoaded,
+                widthAvailable: this.workspaceWidth,
                 onRefresh: () => { this.loadHarborServices(); },
               })
             } else if (this.current === Page.Doctor) {
-              DoctorPage({ result: this.doctor, loaded: this.doctorLoaded,
-                           onRunAgain: () => { this.loadDoctor(); } })
+              this.Diagnostics(false)
             } else if (this.current === Page.Configuration) {
-              ConfigurationPage({ config: this.config, loaded: this.configLoaded })
+              ConfigurationPage({ config: this.config, loaded: this.configLoaded, appearance: this.appearance,
+                appearanceMessage: this.appearanceMessage, appearanceSaving: this.appearanceSaving,
+                taskRunning: this.taskPhase === 'running', onTrust: (target: string, grant: boolean) => { this.changeTrust(target, grant); },
+                onAppearance: (value: Appearance) => { void this.changeAppearance(value); },
+                onRefresh: () => { this.loadConfig(); } })
             }
           }
-          .width('100%').layoutWeight(1)
+          .width('100%').layoutWeight(1).onAreaChange((_, area) => { this.workspaceWidth = Number(area.width); })
 
-          ConsolePanel({ consoleText: this.consoleText })
+          ConsolePanel({ consoleText: this.consoleText, phase: this.taskPhase, label: this.taskLabel,
+            onCancel: () => { void this.doCancel(); } })
         }
-        .layoutWeight(1).height('100%')
+        .layoutWeight(1).height('100%').padding(L.md)
       }
       .width('100%').height('100%')
     }

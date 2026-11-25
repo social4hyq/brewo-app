@@ -36,10 +36,33 @@ zip -q -d "$HAP" 'libs/*' 2>/dev/null || true
 
 echo "==> [4/4] 签名安装"
 mkdir -p "$HERE/dist"
+INSTALL_ARGS=()
+if [[ "${BREWO_REGISTER_HARBOR:-0}" == 1 ]]; then INSTALL_ARGS+=(--no-start); fi
 app-installer install --hap "$HAP" \
   --bundle-id com.social4hyq.brewo --app-name Brewo \
   --module entry --ability EntryAbility \
   --profile "$SP/build-profile.json5" \
-  --signed-hap "$HERE/dist/brewo-signed.hap"
+  --signed-hap "$HERE/dist/brewo-signed.hap" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
+
+if [[ "${BREWO_REGISTER_HARBOR:-0}" == 1 ]]; then
+  SERVICE_DIR="$HOME/.config/brewo"
+  mkdir -p "$SERVICE_DIR"
+  UNIT="$SERVICE_DIR/sh.brew.brewo-app.service"
+  cat > "$UNIT" <<EOF
+[Unit]
+Description=Brewo Homebrew command service
+
+[Service]
+Type=simple
+ExecStart="$HOME/.harmonybrew/opt/python@3.15/bin/python3.15" "$HERE/scripts/brewo-host.py" "--harbor"
+Restart=on-failure
+Environment="HOME=$HOME"
+Environment="USER=${USER:-currentUser}"
+Environment="TMPDIR=/data/storage/el2/base/cache"
+StandardOutput=append:$HOME/.harmonybrew/var/log/brewo-host.log
+StandardError=append:$HOME/.harmonybrew/var/log/brewo-host.log
+EOF
+  python3 "$HERE/scripts/brewo-host.py" --register-harbor --development-unit "$UNIT" --launch-app
+fi
 
 echo "DONE. HAP size: $(du -h "$HAP" | cut -f1)"
