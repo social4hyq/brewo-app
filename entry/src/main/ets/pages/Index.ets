@@ -44,6 +44,14 @@ struct Index {
     });
   }
 
+  private loadDoctor(): void {
+    this.doctorLoaded = false;
+    this.runJob(['doctor', '--json'], 'doctor', (out: string) => {
+      const d = parseDoctorJson(out);
+      if (out.length > 0) { this.doctor = d; this.doctorLoaded = true; }
+    });
+  }
+
   private loadHarborServices(): void {
     queryServices().then((svcs: HarborService[]) => {
       this.harborServices = svcs;
@@ -59,10 +67,7 @@ struct Index {
       if (pkgs.length > 0) { this.packages = pkgs; this.loaded = true; }
       this.consoleText = '$ brew info --installed --json=v2\n→ ' + pkgs.length + ' formulae loaded';
     });
-    this.runJob(['doctor', '--json'], 'doctor', (out: string) => {
-      const d = parseDoctorJson(out);
-      if (out.length > 0) { this.doctor = d; this.doctorLoaded = true; }
-    });
+    this.loadDoctor();
     this.runJob(['config'], 'config', (out: string) => {
       const c = parseConfig(out);
       if (c.length > 0) { this.config = c; this.configLoaded = true; }
@@ -136,6 +141,7 @@ struct Index {
               InstalledPage({
                 packages: this.packages,
                 onUninstall: (p: LivePkg) => { this.doUninstall(p); },
+                onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
                 taskPhase: this.taskPhase,
               })
             } else if (this.current === Page.Upgrades) {
@@ -143,6 +149,7 @@ struct Index {
                 packages: this.packages,
                 onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
                 onUpgradeAll: () => { this.doUpgradeAll(); },
+                onRefresh: () => { this.refreshData(); },
                 onCancel: () => { this.doCancel(); },
                 taskPhase: this.taskPhase,
               })
@@ -155,7 +162,8 @@ struct Index {
                 onRefresh: () => { this.loadHarborServices(); },
               })
             } else if (this.current === Page.Doctor) {
-              DoctorPage({ result: this.doctor, loaded: this.doctorLoaded })
+              DoctorPage({ result: this.doctor, loaded: this.doctorLoaded,
+                           onRunAgain: () => { this.loadDoctor(); } })
             } else if (this.current === Page.Configuration) {
               ConfigurationPage({ config: this.config, loaded: this.configLoaded })
             }

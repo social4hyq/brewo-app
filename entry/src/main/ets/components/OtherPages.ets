@@ -72,6 +72,8 @@ function tierColor(t: number): string { return t >= 2 ? C.statusError : (t === 1
 export struct DoctorPage {
   @Prop result: DoctorResult = { tier: 0, findings: [] };
   @Prop loaded: boolean = false;
+  onRunAgain: () => void = () => {};
+  @State selected: DoctorFinding | undefined = undefined;
 
   build() {
     Column({ space: 0 }) {
@@ -80,33 +82,65 @@ export struct DoctorPage {
         Text('Check your Homebrew installation for problems').fontSize(F.caption).fontColor(C.textSecondary)
       }.width('100%').padding({ left: L.lg, right: L.lg, top: L.md, bottom: L.md })
        .backgroundColor(C.surface).border({ width: { bottom: 1 }, color: C.borderSeparator })
-      Scroll() {
-        Column({ space: L.sm }) {
-          if (!this.loaded) {
-            Text('Running brew doctor…').fontSize(F.callout).fontColor(C.textTertiary).padding(L.md)
-          } else if (this.result.findings.length === 0) {
+
+      Row({ space: 0 }) {
+        Scroll() {
+          Column({ space: L.md }) {
+            // Doctor 标题 + 操作按钮
             Row({ space: L.sm }) {
-              Text('✓').fontSize(16).fontColor(C.statusSuccess)
-              Text('No specific problems detected').fontSize(F.body).fontColor(C.textPrimary)
-            }.width('100%').padding(L.md).borderRadius(L.radiusMd).backgroundColor(C.surface)
-          } else {
-            ForEach(this.result.findings, (f: DoctorFinding) => {
-              Row({ space: L.sm }) {
-                Text(tierIcon(f.tier)).fontSize(16).fontColor(tierColor(f.tier))
-                Column({ space: 3 }) {
-                  ForEach(f.text.split('\n').filter((ln: string): boolean => ln.trim().length > 0), (ln: string) => {
-                    Text(ln).fontSize(F.callout).fontColor(ln.length > 0 && ln.charAt(0) === '#' ? C.textPrimary : C.textSecondary)
-                      .width('100%')
-                  })
-                  if (f.affects.length > 0) {
-                    Text('Affects: ' + f.affects.join(', ')).fontSize(F.caption2).fontColor(C.textTertiary)
-                  }
-                }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-              }.width('100%').padding(L.md).borderRadius(L.radiusMd).backgroundColor(C.surface)
+              Column() {
+                Text('Doctor').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+                Text(this.result.findings.length === 0 ? 'No problems found' : (this.result.findings.length + ' issues found'))
+                  .fontSize(F.callout).fontColor(C.textSecondary)
+                Text('Last checked just now').fontSize(F.caption2).fontColor(C.textTertiary)
+              }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+              Button('Copy output').fontSize(F.caption2).fontColor(C.textSecondary).backgroundColor(C.surfaceRecessed)
+                .height(26)
+              Button('Run Again').fontSize(F.caption2).fontColor(C.textSecondary).backgroundColor(C.surfaceRecessed)
+                .height(26).onClick(() => { this.onRunAgain(); })
+            }.width('100%')
+
+            if (!this.loaded) {
+              Text('Running brew doctor…').fontSize(F.callout).fontColor(C.textTertiary).padding({ top: 40 })
+            } else if (this.result.findings.length === 0) {
+              // 中央大绿勾空状态
+              Column({ space: L.sm }) {
+                Text('✓').fontSize(56).fontColor(C.statusSuccess)
+                Text('Your system is ready to brew').fontSize(F.title1).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+                Text('brew doctor found no problems.').fontSize(F.callout).fontColor(C.textSecondary)
+              }.width('100%').padding({ top: 80 }).alignItems(HorizontalAlign.Center)
+            } else {
+              ForEach(this.result.findings, (f: DoctorFinding) => {
+                Row({ space: L.sm }) {
+                  Text(tierIcon(f.tier)).fontSize(16).fontColor(tierColor(f.tier))
+                  Text(f.text.split('\n')[0]).fontSize(F.callout).fontColor(C.textPrimary)
+                    .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+                }.width('100%').padding(L.md).borderRadius(L.radiusMd).backgroundColor(C.surface)
+                 .backgroundColor(this.selected === f ? C.brandTint : C.surface)
+                 .onClick(() => { this.selected = f; })
+              })
+            }
+          }.width('100%').padding({ left: L.lg, right: L.lg, top: L.md, bottom: L.lg })
+        }.layoutWeight(1).height('100%').backgroundColor(C.surfaceElevated)
+
+        // 右侧详情
+        Column({ space: L.md }) {
+          if (this.selected !== undefined) {
+            Text(tierIcon(this.selected!.tier) + ' Issue details').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+            ForEach(this.selected!.text.split('\n').filter((ln: string): boolean => ln.trim().length > 0), (ln: string) => {
+              Text(ln).fontSize(F.callout).fontColor(C.textSecondary).width('100%')
             })
+            if (this.selected!.affects.length > 0) {
+              Text('Affects: ' + this.selected!.affects.join(', ')).fontSize(F.caption2).fontColor(C.textTertiary)
+            }
+          } else {
+            Text('No selection').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+            Text('Run diagnostics, then choose an issue to see details and fixes.')
+              .fontSize(F.callout).fontColor(C.textSecondary)
           }
-        }.width('100%').padding({ left: L.xl, right: L.xl, top: L.lg, bottom: L.lg })
-      }.layoutWeight(1).height('100%').backgroundColor(C.surfaceElevated)
+        }.width(L.inspectorWidth + 60).height('100%').padding(L.lg)
+         .backgroundColor(C.surfaceElevated).border({ width: { left: 1 }, color: C.borderSeparator })
+      }.width('100%').layoutWeight(1)
     }.width('100%').height('100%').backgroundColor(C.surfaceElevated)
   }
 }

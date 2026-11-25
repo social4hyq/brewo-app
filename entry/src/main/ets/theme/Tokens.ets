@@ -28,6 +28,14 @@ export class C {
   static readonly brandPrimaryPressed: string = '#FBB040';
   static readonly brandTint: string = '#FEF3DC';     // 选中行/包行高亮
 
+  // CTA / controls — Homebrew 7 用系统蓝做主操作按钮（Upgrade All / Install / 分段选中）
+  static readonly ctaBlue: string = '#1A6FE8';
+  static readonly ctaBlueHover: string = '#4A90F0';
+  static readonly ctaBlueSubtle: string = '#DBEAFE';
+  static readonly caskBlue: string = '#5B9BD5';     // CASK 图标蓝
+  static readonly caskTint: string = '#E8F1FB';     // CASK 徽章底
+  static readonly outdated: string = '#B27A1A';     // OUTDATED 徽章文字/版本箭头深琥珀
+
   // Status
   static readonly statusSuccess: string = '#3CB371';
   static readonly statusSuccessSubtle: string = '#EBF7F1';

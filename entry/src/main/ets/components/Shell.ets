@@ -13,16 +13,16 @@ export enum Page {
 export interface NavItem {
   page: Page;
   title: string;
-  icon: string;   // 用系统符号名对应的中文/emoji 近似（ArkTS 无 SF Symbols）
+  icon: string;   // SF Symbols 线框风格的单色 Unicode 近似（避免彩色 emoji）
 }
 
 export const NAV_ITEMS: NavItem[] = [
-  { page: Page.Installed, title: 'Installed', icon: '📦' },
-  { page: Page.Upgrades, title: 'Upgrades', icon: '⬆' },
-  { page: Page.Discover, title: 'Discover', icon: '🔍' },
-  { page: Page.Services, title: 'Services', icon: '🖥' },
-  { page: Page.Doctor, title: 'Doctor', icon: '🩺' },
-  { page: Page.Configuration, title: 'Configuration', icon: '⚙' },
+  { page: Page.Installed, title: 'Installed', icon: '▣' },   // cube.box.fill
+  { page: Page.Upgrades, title: 'Upgrades', icon: '⇧' },     // arrow.up.circle
+  { page: Page.Discover, title: 'Discover', icon: '⌕' },     // magnifyingglass
+  { page: Page.Services, title: 'Services', icon: '▤' },     // server.rack
+  { page: Page.Doctor, title: 'Doctor', icon: '⚕' },         // stethoscope
+  { page: Page.Configuration, title: 'Configuration', icon: '⚙' }, // gearshape
 ];
 
 // 侧边栏：220pt，选中项 brandTint 背景 + 琥珀色文字
@@ -99,6 +99,17 @@ export struct ConsolePanel {
       .onClick(() => { this.expanded = !this.expanded; })
 
       if (this.expanded) {
+        // 命令历史行 + 操作（对齐 BrewUI Console 顶部条）
+        Row({ space: L.sm }) {
+          Circle({ width: 7, height: 7 }).fill(C.statusSuccess)
+          Text('brew …').fontSize(F.codeSmall).fontFamily('monospace').fontColor(C.outdated).layoutWeight(1)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text('Save').fontSize(F.caption2).fontColor(C.textSecondary)
+          Text('Copy').fontSize(F.caption2).fontColor(C.textSecondary)
+          Text('✓ Cleared').fontSize(F.caption2).fontColor(C.statusSuccess)
+        }.width('100%').padding({ left: L.md, right: L.md, top: L.xs, bottom: L.xs })
+         .backgroundColor(C.surface)
+
         Scroll() {
           Column() {
             Text(this.consoleText)
@@ -112,6 +123,17 @@ export struct ConsolePanel {
         .height(180)
         .backgroundColor(C.terminal)
       }
+
+      // 底部状态栏（Ready + 展开箭头）
+      Row({ space: L.sm }) {
+        Circle({ width: 7, height: 7 }).fill(C.textTertiary)
+        Text('Ready').fontSize(F.caption2).fontColor(C.textSecondary)
+        Blank()
+        Text(this.expanded ? '⌄' : '⌃').fontSize(12).fontColor(C.textSecondary)
+          .onClick(() => { this.expanded = !this.expanded; })
+      }.width('100%').padding({ left: L.md, right: L.md, top: 2, bottom: 2 })
+       .backgroundColor(C.surface)
+       .onClick(() => { this.expanded = !this.expanded; })
     }
     .width('100%')
     .backgroundColor(C.surface)
