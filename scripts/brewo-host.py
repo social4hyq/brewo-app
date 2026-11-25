@@ -94,10 +94,12 @@ class Job:
         self.stderr = Path(self.directory.name) / "stderr"
         try:
             with self.stdout.open("wb") as out, self.stderr.open("wb") as err:
+                # HarmonyOS shared storage presents new directories as owned by
+                # File Manager. Brew needs group access to traverse bottle snapshots.
                 self.process = subprocess.Popen([BREW, *arguments], cwd=HOME, env=brew_environment(),
                                                 stdin=subprocess.DEVNULL, stdout=out,
                                                 stderr=err if kind == "read" else subprocess.STDOUT,
-                                                start_new_session=True)
+                                                start_new_session=True, umask=0o022)
         except OSError:
             self.directory.cleanup()
             raise
