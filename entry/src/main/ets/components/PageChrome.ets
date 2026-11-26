@@ -23,6 +23,7 @@ export struct Segments {
 export struct CommandCard {
   @Prop @Watch('resetCopyLabel') command: string = '';
   @Prop caption: string = '终端命令';
+  @Prop maxCommandLines: number = 2147483647;
   @State copyLabel: string = '复制';
 
   private resetCopyLabel(): void { this.copyLabel = '复制'; }
@@ -41,6 +42,7 @@ export struct CommandCard {
       }.width('100%').padding({ left: L.md, right: L.xs, top: 3, bottom: 3 })
       .backgroundColor(C.surfaceRecessed)
       Text(this.command).fontSize(F.code).fontColor(C.textPrimary).fontFamily('monospace')
+        .maxLines(this.maxCommandLines).textOverflow({ overflow: TextOverflow.Ellipsis })
         .width('100%').padding(L.md).copyOption(CopyOptions.LocalDevice)
     }.width('100%').border({ width: 1, color: C.borderSeparator, radius: L.radiusMd }).clip(true)
   }

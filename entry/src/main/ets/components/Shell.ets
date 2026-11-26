@@ -7,7 +7,7 @@ interface NavItem { page: Page; title: string; icon: string; }
 
 const NAV_ITEMS: NavItem[] = [
   { page: Page.Installed, title: '已安装', icon: '▣' },
-  { page: Page.Upgrades, title: '更新看板', icon: '⇧' },
+  { page: Page.Upgrades, title: '升级', icon: '⇧' },
   { page: Page.Discover, title: '发现', icon: '⌕' },
   { page: Page.Services, title: '服务', icon: '▤' },
   { page: Page.Doctor, title: 'Doctor 诊断', icon: '✚' },
