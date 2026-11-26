@@ -13,6 +13,8 @@ function formatDate(ts: number): string {
 
 function packageKey(p: LivePkg): string { return p.fullName || p.name; }
 
+function isManagedByTerminal(p: LivePkg): boolean { return p.name === 'brewo-app' || p.name === 'harbor-app'; }
+
 function resolveDependency(name: string, packages: LivePkg[]): LivePkg | undefined {
   if (name.includes('/')) return packages.find((p: LivePkg) => p.fullName === name);
   const matches = packages.filter((p: LivePkg) => p.name === name);
@@ -147,6 +149,7 @@ struct PackageInspector {
   @Prop @Watch('refreshDependents') pkg: LivePkg;
   @Prop @Watch('refreshDependents') packages: LivePkg[] = [];
   @Prop taskPhase: string = '';
+  @Prop refreshing: boolean = false;
   @State tab: string = '概览';
   @State dependents: LivePkg[] = [];
   onSelect: (p: LivePkg) => void = () => {};
@@ -281,15 +284,20 @@ struct PackageInspector {
             }.width('100%').padding(L.md).backgroundColor(C.surfaceRecessed).borderRadius(L.radiusMd)
           }
           Row({ space: L.sm }) {
-            if (this.pkg.outdated) {
+            if (this.pkg.outdated && !isManagedByTerminal(this.pkg)) {
               Button('更新软件包', { type: ButtonType.Normal }).height(32).borderRadius(6)
                 .fontSize(F.callout).fontColor(Color.White).backgroundColor(C.ctaBlue)
-                .enabled(this.taskPhase !== 'running' && !this.pkg.pinned).onClick(() => { this.onUpgrade(this.pkg); })
+                .enabled(this.taskPhase !== 'running' && !this.refreshing && !this.pkg.pinned)
+                .onClick(() => { this.onUpgrade(this.pkg); })
             }
-            Button('卸载…', { type: ButtonType.Normal }).height(32).borderRadius(6)
-              .fontSize(F.callout).fontColor(C.statusError).backgroundColor(C.statusErrorSubtle)
-              .enabled(this.taskPhase !== 'running' && this.dependents.length === 0)
-              .onClick(() => { this.confirmUninstall(); })
+            if (isManagedByTerminal(this.pkg)) {
+              Text('请在终端中管理此软件包。').fontSize(F.callout).fontColor(C.textSecondary)
+            } else {
+              Button('卸载…', { type: ButtonType.Normal }).height(32).borderRadius(6)
+                .fontSize(F.callout).fontColor(C.statusError).backgroundColor(C.statusErrorSubtle)
+                .enabled(this.taskPhase !== 'running' && !this.refreshing && this.dependents.length === 0)
+                .onClick(() => { this.confirmUninstall(); })
+            }
           }.width('100%')
         }
       }.width('100%').padding(L.lg).alignItems(HorizontalAlign.Start)
@@ -303,13 +311,15 @@ export struct InstalledPage {
   @Prop loaded: boolean = false;
   @Prop loadFailed: boolean = false;
   @Prop taskPhase: string = '';
-  @State selected: string = '';
+  @Link selected: string;
   @State query: string = '';
   @State hideDeps: boolean = false;
   @State paneWidth: number = 900;
   @State showDetail: boolean = false;
   onUninstall: (p: LivePkg) => void = () => {};
   onUpgrade: (p: LivePkg) => void = () => {};
+
+  aboutToAppear(): void { this.showDetail = this.selected.length > 0; }
 
   private filtered(): LivePkg[] {
     const query = this.query.trim().toLowerCase();
@@ -334,7 +344,7 @@ export struct InstalledPage {
       Row({ space: L.sm }) {
         Column({ space: 4 }) {
           Text('已安装的软件包').fontSize(F.title1).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
-          Text(this.loadFailed ? '读取失败，可在更新看板重试' :
+          Text(this.loadFailed ? '读取失败，可在升级页重试' :
             this.loaded ? this.filtered().length + ' / ' + this.packages.length + ' 个软件包' : '正在读取本机软件包…')
             .fontSize(F.caption).fontColor(C.textSecondary)
         }.layoutWeight(1).alignItems(HorizontalAlign.Start)
@@ -429,96 +439,225 @@ export struct InstalledPage {
 export struct UpgradesPage {
   @Prop packages: LivePkg[] = [];
   @Prop loaded: boolean = false;
+  @Prop loading: boolean = true;
   @Prop loadFailed: boolean = false;
+  @Prop widthAvailable: number = 0;
   @Prop taskPhase: string = '';
-  @State selected: string[] = [];
+  @State query: string = '';
+  @State checkedKeys: string[] = [];
+  @State selectedKey: string = '';
   onUpgrade: (p: LivePkg) => void = () => {};
+  onUninstall: (p: LivePkg) => void = () => {};
   onUpgradeSelected: (packages: LivePkg[]) => void = () => {};
   onPreview: (packages: LivePkg[]) => void = () => {};
   onRefresh: () => void = () => {};
+  onOpenInstalled: (p: LivePkg) => void = () => {};
+  private upgradeScroller: ListScroller = new ListScroller();
 
   private outdated(): LivePkg[] { return this.packages.filter((p: LivePkg) => p.outdated && !p.pinned); }
-  private checked(): LivePkg[] { return this.outdated().filter((p: LivePkg) => this.selected.includes(packageKey(p))); }
+
+  private visible(): LivePkg[] {
+    const query = this.query.trim().toLowerCase();
+    return this.outdated().filter((p: LivePkg) => packageKey(p).toLowerCase().includes(query) ||
+      p.desc.toLowerCase().includes(query));
+  }
+
+  private active(): LivePkg | undefined {
+    return this.visible().find((p: LivePkg) => packageKey(p) === this.selectedKey);
+  }
+
+  private actionable(): LivePkg[] { return this.visible().filter((p: LivePkg) => !isManagedByTerminal(p)); }
+  private checked(): LivePkg[] { return this.actionable().filter((p: LivePkg) => this.checkedKeys.includes(packageKey(p))); }
+  private targets(): LivePkg[] { return this.checked().length > 0 ? this.checked() : this.actionable(); }
+  private busy(): boolean { return this.loading || this.taskPhase === 'running'; }
 
   private toggle(p: LivePkg, checked: boolean): void {
     const key = packageKey(p);
-    if (checked && !this.selected.includes(key)) this.selected = this.selected.concat(key);
-    if (!checked) this.selected = this.selected.filter((item: string) => item !== key);
+    if (checked && !this.checkedKeys.includes(key)) this.checkedKeys = this.checkedKeys.concat(key);
+    if (!checked) this.checkedKeys = this.checkedKeys.filter((item: string) => item !== key);
+  }
+
+  private subtitle(): string {
+    if (!this.loaded && this.loading) return '正在加载软件包…';
+    if (this.loading) return '正在检查可用升级…';
+    if (this.loadFailed) return this.loaded ? '检查失败，显示上次结果' : '检查可用升级失败';
+    const count = this.outdated().length;
+    return this.query.trim() && count > 0 ? '显示 ' + this.visible().length + ' / ' + count + ' 个可用升级' :
+      count + ' 个软件包可升级';
+  }
+
+  private command(): string {
+    return 'brew upgrade --formula' + this.targets().map((p: LivePkg) => ' ' + packageKey(p)).join('');
+  }
+
+  private bulkLabel(): string {
+    if (this.checked().length > 0) return '升级所选';
+    return this.query.trim() ? '升级搜索结果' : '全部升级';
+  }
+
+  private navigateUpgrades(step: number): void {
+    if (this.widthAvailable < 710) return;
+    const rows = this.visible();
+    const current = rows.findIndex((p: LivePkg) => packageKey(p) === this.selectedKey);
+    const next = current + step;
+    if (next < 0 || next >= rows.length) return;
+    this.selectedKey = packageKey(rows[next]);
+    this.upgradeScroller.scrollToIndex(next, false, ScrollAlign.AUTO);
+  }
+
+  @Builder
+  UpgradeSkeleton() {
+    Column() {
+      ForEach([0, 1, 2, 3], (index: number) => {
+        Column({ space: L.sm }) {
+          Row({ space: L.sm }) {
+            Rect().width(index === 3 ? '28%' : '37%').height(10).fill(C.borderDefault).radius(3)
+            Rect().width(36).height(8).fill(C.statusWarningSubtle).radius(3)
+            Rect().width(14).height(14).fill(C.statusSuccessSubtle).radius(3)
+          }.width('100%')
+          Rect().width('94%').height(8).fill(C.surfaceRecessed).radius(3)
+          Rect().width('28%').height(7).fill(C.surfaceRecessed).radius(3)
+        }.width('100%').height(78).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Start)
+        if (index < 3) { Divider().color(C.borderSeparator) }
+      }, (index: number) => String(index))
+    }.width('100%').layoutWeight(1).clip(true).id('upgrades-list-skeleton')
+      .accessibilityLevel('no-hide-descendants')
+  }
+
+  @Builder
+  UpgradeActions() {
+    Row({ space: L.xs }) {
+      Checkbox().select(this.checked().length === this.actionable().length).selectedColor(C.ctaBlue)
+        .width(20).height(20).enabled(!this.busy()).accessibilityText('勾选列表中可升级的软件包')
+        .onChange((value: boolean) => {
+          this.checkedKeys = value ? this.actionable().map((p: LivePkg) => packageKey(p)) : [];
+        })
+      Button('预览', { type: ButtonType.Normal }).height(32).borderRadius(6)
+        .fontSize(F.callout).fontColor(C.textLink).backgroundColor(C.brandTint)
+        .enabled(!this.busy()).onClick(() => { this.onPreview(this.targets()); })
+      Button(this.bulkLabel() + '（' + this.targets().length + '）',
+        { type: ButtonType.Normal }).height(32).borderRadius(6)
+        .fontSize(F.callout).fontColor(Color.White).backgroundColor(C.ctaBlue)
+        .enabled(!this.busy()).onClick(() => { this.onUpgradeSelected(this.targets()); })
+    }.width('100%')
+  }
+
+  @Builder
+  UpgradeRow(p: LivePkg) {
+    Row({ space: L.sm }) {
+      if (!isManagedByTerminal(p)) {
+        Checkbox().select(this.checkedKeys.includes(packageKey(p))).selectedColor(C.ctaBlue).width(20).height(20)
+          .enabled(!this.busy()).accessibilityText('勾选 ' + p.name)
+          .onChange((value: boolean) => { this.toggle(p, value); })
+      }
+      Button({ type: ButtonType.Normal }) {
+        Column({ space: L.xs }) {
+          Text(p.name).fontSize(F.body).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(p.desc || p.tap).fontSize(F.callout).fontColor(C.textSecondary)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text((p.installedVersion || '—') + ' → ' + (p.latestVersion || '—'))
+            .fontSize(F.caption).fontFamily('monospace').fontColor(C.outdated)
+            .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.width('100%').padding(L.sm).alignItems(HorizontalAlign.Start)
+      }.layoutWeight(1).padding(0).borderRadius(L.radiusSm).backgroundColor(Color.Transparent)
+        .accessibilitySelected(this.selectedKey === packageKey(p)).id('upgrade-' + packageKey(p))
+        .onClick(() => { this.selectedKey = packageKey(p); })
+    }.width('100%').padding({ left: L.sm, right: L.sm }).borderRadius(L.radiusSm)
+      .backgroundColor(this.selectedKey === packageKey(p) ? C.selectionFill : Color.Transparent)
+  }
+
+  @Builder
+  AvailableUpgrades() {
+    Column({ space: L.md }) {
+      Row({ space: L.sm }) {
+        Column({ space: L.xs }) {
+          Text('可用升级').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+          Text(this.subtitle()).fontSize(F.callout).fontColor(C.textSecondary)
+        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+        if (this.loaded || this.loadFailed) {
+          Button(this.loadFailed && !this.loading ? '重试' : '刷新', { type: ButtonType.Normal })
+            .height(32).borderRadius(6).fontSize(F.callout).fontColor(C.textLink).backgroundColor(C.brandTint)
+            .enabled(!this.busy()).onClick(() => { this.onRefresh(); })
+        }
+      }.width('100%')
+      if (this.actionable().length > 0) {
+        CommandCard({ command: this.command(), maxCommandLines: 2 })
+        this.UpgradeActions()
+      }
+      if (!this.loaded && this.loading) {
+        this.UpgradeSkeleton()
+      } else if (this.visible().length > 0) {
+        List({ scroller: this.upgradeScroller }) {
+          ForEach(this.visible(), (p: LivePkg) => {
+            ListItem() { this.UpgradeRow(p) }
+          }, (p: LivePkg) => packageKey(p))
+        }.width('100%').layoutWeight(1).divider({ strokeWidth: 1, color: C.borderSeparator })
+          .keyboardShortcut(FunctionKey.DPAD_UP, [], () => { this.navigateUpgrades(-1); })
+          .keyboardShortcut(FunctionKey.DPAD_DOWN, [], () => { this.navigateUpgrades(1); })
+      } else if (!this.loading && !this.loadFailed) {
+        Column({ space: L.sm }) {
+          if (this.outdated().length > 0) {
+            Text('没有匹配的升级').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+            Button('显示全部升级', { type: ButtonType.Normal }).height(32).fontSize(F.callout)
+              .fontColor(C.textLink).backgroundColor(C.brandTint).onClick(() => { this.query = ''; })
+          } else {
+            Text('✓').fontSize(32).fontColor(C.statusSuccess)
+            Text('没有可升级的软件包').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+          }
+        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
+      }
+    }.width('100%').height('100%').padding(L.lg).alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  UpgradeDetails() {
+    Column() {
+      if (this.widthAvailable < 710) {
+        Button('‹ 返回可用升级', { type: ButtonType.Normal }).height(32).fontSize(F.callout)
+          .fontColor(C.textLink).backgroundColor(Color.Transparent).onClick(() => { this.selectedKey = ''; })
+      }
+      if (this.active() !== undefined) {
+        Column() {
+          PackageInspector({ pkg: this.active()!, packages: this.packages, taskPhase: this.taskPhase,
+            refreshing: this.loading, onUpgrade: this.onUpgrade, onUninstall: this.onUninstall,
+            onSelect: this.onOpenInstalled })
+        }.width('100%').layoutWeight(1)
+      } else {
+        Column({ space: L.xs }) {
+          Text('尚未选择').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+          Text('从列表中选择一个软件包以查看详情。').fontSize(F.callout).fontColor(C.textSecondary)
+        }.width('100%').padding(L.lg).alignItems(HorizontalAlign.Start).id('upgrades-no-selection')
+      }
+    }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
   }
 
   build() {
-    Column({ space: L.md }) {
-      Row({ space: L.sm }) {
-        Column({ space: 4 }) {
-          Text('更新看板').fontSize(F.title1).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
-          Text(this.loadFailed ? '读取失败，请刷新软件包列表' :
-            this.loaded ? this.outdated().length + ' 个软件包可更新' : '正在读取本机软件包…')
-            .fontSize(F.callout).fontColor(C.textSecondary)
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Button('刷新', { type: ButtonType.Normal }).height(32).borderRadius(6)
-          .fontSize(F.callout).fontColor(C.textLink).backgroundColor(C.brandTint)
-          .enabled(this.taskPhase !== 'running').onClick(() => { this.onRefresh(); })
-      }.width('100%')
-
-      if (this.outdated().length > 0) {
-        Row({ space: L.xs }) {
-          Checkbox().select(this.checked().length === this.outdated().length)
-            .selectedColor(C.ctaBlue).width(20).height(20).accessibilityText('全选可更新软件包')
-            .enabled(this.taskPhase !== 'running').onChange((value: boolean) => {
-              this.selected = value ? this.outdated().map((p: LivePkg) => packageKey(p)) : [];
-            })
-          Text('全选 · 已选 ' + this.checked().length).fontSize(F.callout).fontColor(C.textSecondary).layoutWeight(1)
-          Button('预览', { type: ButtonType.Normal }).height(32).borderRadius(6)
-            .fontSize(F.callout).fontColor(C.textLink).backgroundColor(C.brandTint)
-            .enabled(this.checked().length > 0 && this.taskPhase !== 'running')
-            .onClick(() => { this.onPreview(this.checked()); })
-          Button('更新所选', { type: ButtonType.Normal }).height(32).borderRadius(6)
-            .fontSize(F.callout).fontColor(Color.White).backgroundColor(C.ctaBlue)
-            .enabled(this.checked().length > 0 && this.taskPhase !== 'running')
-            .onClick(() => { this.onUpgradeSelected(this.checked()); })
-        }.width('100%').padding(L.sm).backgroundColor(C.surfaceRecessed).borderRadius(8)
-
-        Row({ space: L.sm }) {
-          Text('软件包').fontSize(F.caption).fontColor(C.textSecondary).layoutWeight(1)
-          Text('当前版本').fontSize(F.caption).fontColor(C.textSecondary).width(65)
-          Blank().width(8)
-          Text('最新版本').fontSize(F.caption).fontColor(C.textSecondary).width(65)
-          Text('操作').fontSize(F.caption).fontColor(C.textSecondary).width(52)
-        }.width('100%').padding({ left: L.md, right: L.sm })
-
-        List({ space: 6 }) {
-          ForEach(this.outdated(), (p: LivePkg) => {
-            ListItem() {
-              Row({ space: L.sm }) {
-                Checkbox().select(this.selected.includes(packageKey(p))).selectedColor(C.ctaBlue).width(20).height(20)
-                  .enabled(this.taskPhase !== 'running').accessibilityText('选择 ' + p.name)
-                  .onChange((value: boolean) => { this.toggle(p, value); })
-                PackageGlyph({ name: p.name, glyphSize: 30 })
-                Text(p.name).fontSize(F.body).fontWeight(FontWeight.Medium).fontColor(C.textPrimary)
-                  .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
-                Text(p.installedVersion).fontSize(F.caption2).fontFamily('monospace').fontColor(C.textSecondary)
-                  .width(65).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                Text('→').fontSize(F.caption2).fontColor(C.textTertiary).width(8)
-                Text(p.latestVersion).fontSize(F.caption2).fontFamily('monospace').fontColor(C.statusSuccess)
-                  .width(65).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-                Button('更新', { type: ButtonType.Normal }).width(52).height(28).padding(0).borderRadius(6)
-                  .fontSize(F.callout).fontColor(C.textLink).backgroundColor(C.brandTint)
-                  .enabled(this.taskPhase !== 'running').accessibilityText('更新 ' + p.name)
-                  .onClick(() => { this.onUpgrade(p); })
-              }.width('100%').height(48).padding({ left: L.sm, right: L.sm })
-              .backgroundColor(C.surfaceElevated).borderRadius(8)
-            }
-          }, (p: LivePkg) => packageKey(p))
-        }.width('100%').layoutWeight(1)
-      } else if (this.loaded) {
-        Column({ space: L.sm }) {
-          Text('✓').fontSize(34).fontColor(C.statusSuccess)
-          Text('没有可更新的软件包').fontSize(F.title2).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
-          Text('已固定的软件包不会纳入更新。').fontSize(F.callout).fontColor(C.textSecondary)
-        }.width('100%').layoutWeight(1).justifyContent(FlexAlign.Center)
-      }
-    }.height('100%').width('100%').padding(L.lg).backgroundColor(C.surface)
-    .border({ width: 1, color: C.borderDefault, radius: L.radiusMd })
+    Column() {
+      Flex({ wrap: FlexWrap.Wrap, alignItems: ItemAlign.Center, justifyContent: FlexAlign.SpaceBetween }) {
+        Column({ space: L.xs }) {
+          Text('升级').fontSize(F.title1).fontWeight(FontWeight.Bold).fontColor(C.textPrimary)
+          Text('查看并升级有新版本的软件包').fontSize(F.callout).fontColor(C.textSecondary)
+        }.padding({ right: L.md, bottom: L.xs }).alignItems(HorizontalAlign.Start)
+        Column() {
+          SearchBox({ query: this.query, hint: '搜索可用升级', focusKey: 'upgrades-search' })
+        }.width(this.widthAvailable >= 600 ? '43%' : '100%')
+      }.width('100%').padding(L.lg).border({ width: { bottom: 1 }, color: C.borderSeparator })
+      Row() {
+        if (this.widthAvailable >= 710 || this.active() === undefined) {
+          Column() { this.AvailableUpgrades() }.layoutWeight(1).height('100%')
+        }
+        if (this.widthAvailable >= 710 || this.active() !== undefined) {
+          Column() { this.UpgradeDetails() }.layoutWeight(1).height('100%')
+            .border({ width: { left: this.widthAvailable >= 710 ? 1 : 0 }, color: C.borderSeparator })
+        }
+      }.width('100%').layoutWeight(1)
+    }.width('100%').height('100%').backgroundColor(C.surface)
+      .border({ width: 1, color: C.borderDefault, radius: L.radiusMd })
+      .keyboardShortcut('f', [ModifierKey.CTRL], () => {
+        this.getUIContext().getFocusController().requestFocus('upgrades-search');
+      })
+      .keyboardShortcut(FunctionKey.ESC, [], () => { this.selectedKey = ''; })
   }
 }
 

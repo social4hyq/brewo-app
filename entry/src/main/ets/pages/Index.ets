@@ -21,6 +21,8 @@ struct Index {
   @State casks: InstalledCask[] = [];
   @State loaded: boolean = false;
   @State inventoryError: boolean = false;
+  @State inventoryLoading: boolean = true;
+  @State installedSelection: string = '';
   @State doctor: DoctorResult = { tier: 0, findings: [] };
   @State doctorLoaded: boolean = false;
   @State doctorValid: boolean = false;
@@ -39,23 +41,29 @@ struct Index {
   @State appearanceSaving: boolean = false;
   private writeJob: string = '';
   private cancelling: boolean = false;
+  private inventoryRefreshPending: boolean = false;
   private readJobs: Set<string> = new Set<string>();
 
-  private runJob(args: string[], id: string, done: (out: string) => void): void {
+  private runJob(args: string[], id: string, done: (out: string, succeeded: boolean) => void): void {
     if (this.readJobs.has(id)) return;
     this.readJobs.add(id);
     startJob(args).then((job: string) => waitForJob(job, () => {})).then((result: BrewJobStatus) => {
       this.readJobs.delete(id);
-      done(result.output);
+      done(result.output, result.exitCode === 0 && !result.cancelled);
     }).catch((error: Error) => {
       this.readJobs.delete(id);
-      done(error.message);
+      done(error.message, false);
     });
   }
 
   private refreshData(): void {
-    this.runJob(['info', '--installed', '--json=v2'], 'info-all', (out: string) => {
-      const pkgs = parseInfoJson(out);
+    if (this.readJobs.has('info-all')) {
+      this.inventoryRefreshPending = true;
+      return;
+    }
+    this.inventoryLoading = true;
+    this.runJob(['info', '--installed', '--json=v2'], 'info-all', (out: string, succeeded: boolean) => {
+      const pkgs = succeeded ? parseInfoJson(out) : undefined;
       this.inventoryError = pkgs === undefined;
       if (pkgs !== undefined) {
         this.packages = pkgs;
@@ -65,6 +73,12 @@ struct Index {
       if (this.taskPhase === '') {
         this.consoleText = '$ brew info --installed --json=v2\n' +
           (pkgs !== undefined ? '✓ 已读取 ' + pkgs.length + ' 个软件包' : '✕ 无法读取已安装的软件包\n' + out);
+      }
+      if (this.inventoryRefreshPending) {
+        this.inventoryRefreshPending = false;
+        this.refreshData();
+      } else {
+        this.inventoryLoading = false;
       }
     });
   }
@@ -148,17 +162,17 @@ struct Index {
     return this.taskPhase;
   }
   private doUpgrade(p: LivePkg): void {
-    void this.runWrite('更新 ' + p.name, ['upgrade', '--formula', p.fullName || p.name]);
+    void this.runWrite('升级 ' + p.name, ['upgrade', '--formula', p.fullName || p.name]);
   }
   private doUpgradeSelected(packages: LivePkg[]): void {
     if (packages.length === 0) return;
-    void this.runWrite('更新 ' + packages.length + ' 个软件包',
+    void this.runWrite('升级 ' + packages.length + ' 个软件包',
       ['upgrade', '--formula'].concat(packages.map((p: LivePkg) => p.fullName || p.name)));
   }
 
   private previewUpgrade(packages: LivePkg[]): void {
     if (packages.length === 0) return;
-    void this.runWrite('预览 ' + packages.length + ' 个软件包的更新',
+    void this.runWrite('预览 ' + packages.length + ' 个软件包的升级',
       ['upgrade', '--dry-run', '--formula'].concat(packages.map((p: LivePkg) => p.fullName || p.name)),
       false);
   }
@@ -207,12 +221,6 @@ struct Index {
     }
   }
 
-  @Builder
-  Diagnostics(compact: boolean) {
-    DoctorPage({ result: this.doctor, loaded: this.doctorLoaded, valid: this.doctorValid, rawOutput: this.doctorOutput,
-      compact: compact, widthAvailable: this.workspaceWidth, onRunAgain: () => { this.loadDoctor(); } })
-  }
-
   build() {
     Column({ space: 0 }) {
       Row({ space: 0 }) {
@@ -225,28 +233,25 @@ struct Index {
                 packages: this.packages,
                 loaded: this.loaded,
                 loadFailed: this.inventoryError,
+                selected: this.installedSelection,
                 onUninstall: (p: LivePkg) => { this.doUninstall(p); },
                 onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
                 taskPhase: this.taskPhase,
               })
             } else if (this.current === Page.Upgrades) {
-              Row({ space: L.md }) {
-                Column() {
-                  UpgradesPage({
-                    packages: this.packages,
-                    loaded: this.loaded,
-                    loadFailed: this.inventoryError,
-                    onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
-                    onUpgradeSelected: (items: LivePkg[]) => { this.doUpgradeSelected(items); },
-                    onPreview: (items: LivePkg[]) => { this.previewUpgrade(items); },
-                    onRefresh: () => { this.reloadBrew(); },
-                    taskPhase: this.taskPhase,
-                  })
-                }.layoutWeight(1.15).height('100%')
-                if (this.workspaceWidth >= 840) {
-                  Column() { this.Diagnostics(true) }.layoutWeight(1).height('100%')
-                }
-              }.width('100%').height('100%')
+              UpgradesPage({
+                packages: this.packages, loaded: this.loaded, loading: this.inventoryLoading,
+                loadFailed: this.inventoryError, widthAvailable: this.workspaceWidth, taskPhase: this.taskPhase,
+                onUpgrade: (p: LivePkg) => { this.doUpgrade(p); },
+                onUninstall: (p: LivePkg) => { this.doUninstall(p); },
+                onUpgradeSelected: (items: LivePkg[]) => { this.doUpgradeSelected(items); },
+                onPreview: (items: LivePkg[]) => { this.previewUpgrade(items); },
+                onRefresh: () => { this.refreshData(); },
+                onOpenInstalled: (p: LivePkg) => {
+                  this.installedSelection = p.fullName || p.name;
+                  this.current = Page.Installed;
+                },
+              })
             } else if (this.current === Page.Discover) {
               DiscoverPage({ installed: this.packages, installedCasks: this.casks, widthAvailable: this.workspaceWidth,
                 taskRunning: this.taskPhase === 'running',
@@ -259,7 +264,8 @@ struct Index {
                 onRefresh: () => { this.loadHarborServices(); },
               })
             } else if (this.current === Page.Doctor) {
-              this.Diagnostics(false)
+              DoctorPage({ result: this.doctor, loaded: this.doctorLoaded, valid: this.doctorValid,
+                rawOutput: this.doctorOutput, widthAvailable: this.workspaceWidth, onRunAgain: () => { this.loadDoctor(); } })
             } else if (this.current === Page.Configuration) {
               ConfigurationPage({ config: this.config, loaded: this.configLoaded, appearance: this.appearance,
                 appearanceMessage: this.appearanceMessage, appearanceSaving: this.appearanceSaving,
